@@ -9,20 +9,93 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#3B82F6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Todo App">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <style>
+        /* Only keeping essential custom styles that can't be replicated with Tailwind */
+        
+        /* Custom checkbox styling - Tailwind doesn't have built-in checkbox styling */
+        .custom-checkbox {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #d1d5db;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            position: relative;
+            flex-shrink: 0;
+            transition: all 0.2s ease;
+        }
+        
+        .custom-checkbox:checked {
+            background: #3b82f6;
+            border-color: #3b82f6;
+        }
+        
+        .custom-checkbox:checked::after {
+            content: '✓';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .dark .custom-checkbox {
+            border-color: #6b7280;
+            background: #374151;
+        }
+        
+        .dark .custom-checkbox:checked {
+            background: #3b82f6;
+            border-color: #3b82f6;
+        }
+    </style>
 </head>
 <body>
     <div id="root"></div>
     <script>
         tailwind.config = {
             darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'bounce-in': 'bounceIn 0.5s ease-out',
+                        'fade-in': 'fadeIn 0.3s ease-out',
+                        'slide-in': 'slideIn 0.3s ease-out',
+                        'pulse-tap': 'pulse 0.2s ease-in-out',
+                    },
+                    keyframes: {
+                        slideIn: {
+                            '0%': { opacity: '0', transform: 'translateY(-10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        },
+                        pulse: {
+                            '0%': { transform: 'scale(1)' },
+                            '50%': { transform: 'scale(1.05)' },
+                            '100%': { transform: 'scale(1)' }
+                        }
+                    },
+                    scrollbar: {
+                        thin: '6px',
+                    }
+                }
+            }
         }
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useCallback } = React;
 
         const STORAGE_KEY = "ocg-todos";
         const THEME_KEY = "ocg-theme";
+        const STATS_KEY = "ocg-stats";
         const varFiltersCg = ["all", "active", "completed"];
 
         // Sound effect URLs
@@ -31,9 +104,14 @@
         const DELETE_SOUND = "https://cdn.freesound.org/previews/235/235122_950925-lq.mp3";
 
         const playSound = (url) => {
-            const audio = new Audio(url);
-            audio.currentTime = 0;
-            audio.play();
+            try {
+                const audio = new Audio(url);
+                audio.currentTime = 0;
+                audio.volume = 0.3;
+                audio.play().catch(() => {});
+            } catch (error) {
+                // Silently handle audio errors
+            }
         };
 
         const saveTodos = (todos) => localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
@@ -42,137 +120,288 @@
         const saveTheme = (theme) => localStorage.setItem(THEME_KEY, theme);
         const loadTheme = () => localStorage.getItem(THEME_KEY) || "light";
 
-        const TodoItem = ({ todo, onToggle, onDelete, onEdit }) => {
+        const saveStats = (stats) => localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+        const loadStats = () => JSON.parse(localStorage.getItem(STATS_KEY)) || { completed: 0, created: 0 };
+
+        // Touch gesture hook for swipe-to-delete
+        const useSwipeGesture = (onSwipeLeft, threshold = 100) => {
+            const [startX, setStartX] = useState(null);
+            const [currentX, setCurrentX] = useState(null);
+            const [swiping, setSwiping] = useState(false);
+
+            const handleTouchStart = (e) => {
+                setStartX(e.touches[0].clientX);
+                setSwiping(true);
+            };
+
+            const handleTouchMove = (e) => {
+                if (!startX) return;
+                setCurrentX(e.touches[0].clientX);
+            };
+
+            const handleTouchEnd = () => {
+                if (!startX || !currentX) {
+                    setSwiping(false);
+                    setStartX(null);
+                    setCurrentX(null);
+                    return;
+                }
+
+                const diffX = startX - currentX;
+                if (diffX > threshold) {
+                    onSwipeLeft();
+                }
+
+                setSwiping(false);
+                setStartX(null);
+                setCurrentX(null);
+            };
+
+            const swipeDistance = startX && currentX ? startX - currentX : 0;
+            const isSwipingLeft = swipeDistance > 0;
+
+            return {
+                onTouchStart: handleTouchStart,
+                onTouchMove: handleTouchMove,
+                onTouchEnd: handleTouchEnd,
+                swiping,
+                swipeDistance: Math.max(0, swipeDistance),
+                isSwipingLeft
+            };
+        };
+
+        const TodoItem = ({ todo, onToggle, onDelete, onEdit, isNew }) => {
             const [editing, setEditing] = useState(false);
             const [value, setValue] = useState(todo.text);
+            const swipeGesture = useSwipeGesture(() => onDelete(todo.id), 80);
 
             const handleBlur = () => {
                 setEditing(false);
-                if (value.trim()) onEdit(todo.id, value.trim());
+                if (value.trim() && value.trim() !== todo.text) {
+                    onEdit(todo.id, value.trim());
+                } else {
+                    setValue(todo.text);
+                }
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    handleBlur();
+                } else if (e.key === 'Escape') {
+                    setValue(todo.text);
+                    setEditing(false);
+                }
             };
 
             return (
-                <div className="flex items-center gap-3 p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow">
-                    <input
-                        type="checkbox"
-                        checked={todo.completed}
-                        onChange={() => {
-                            playSound(COMPLETE_SOUND);
-                            onToggle(todo.id);
-                        }}
-                        className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                    />
-                    {editing ? (
-                        <input
-                            value={value}
-                            onChange={(e) => setValue(e.target.value)}
-                            onBlur={handleBlur}
-                            onKeyDown={(e) => e.key === 'Enter' && handleBlur()}
-                            autoFocus
-                            className="flex-1 px-2 py-1 text-lg rounded bg-gray-100 dark:bg-gray-700 dark:text-white"
-                        />
-                    ) : (
-                        <span
-                            onDoubleClick={() => setEditing(true)}
-                            className={`flex-1 text-lg cursor-text ${
-                                todo.completed ? 'line-through text-green-600 opacity-75' : 'text-gray-800 dark:text-gray-100'
-                            }`}
+                <div 
+                    className={`relative overflow-hidden ${isNew ? 'animate-slide-in' : ''}`}
+                    {...swipeGesture}
+                >
+                    {/* Swipe indicator */}
+                    {swipeGesture.swiping && swipeGesture.isSwipingLeft && (
+                        <div 
+                            className="absolute right-0 top-0 h-full bg-red-500 flex items-center justify-center text-white font-bold z-10"
+                            style={{ width: Math.min(swipeGesture.swipeDistance, 100) }}
                         >
-                            {todo.text}
-                        </span>
+                            {swipeGesture.swipeDistance > 60 && '🗑️'}
+                        </div>
                     )}
-                    <button
-                        onClick={() => {
-                            playSound(DELETE_SOUND);
-                            onDelete(todo.id);
+                    
+                    <div 
+                        className="flex items-center gap-3 p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-all duration-200 touch-manipulation min-h-[44px]"
+                        style={{
+                            transform: swipeGesture.swiping && swipeGesture.isSwipingLeft 
+                                ? `translateX(-${Math.min(swipeGesture.swipeDistance, 100)}px)` 
+                                : 'translateX(0)'
                         }}
-                        className="px-3 py-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-800 rounded-md text-sm font-medium transition-colors"
                     >
-                        Delete
-                    </button>
+                        <input
+                            type="checkbox"
+                            checked={todo.completed}
+                            onChange={() => {
+                                playSound(COMPLETE_SOUND);
+                                onToggle(todo.id);
+                            }}
+                            className="custom-checkbox active:animate-pulse-tap"
+                        />
+                        
+                        {editing ? (
+                            <input
+                                value={value}
+                                onChange={(e) => setValue(e.target.value)}
+                                onBlur={handleBlur}
+                                onKeyDown={handleKeyDown}
+                                autoFocus
+                                className="flex-1 px-3 py-2 text-base rounded-lg bg-gray-100 dark:bg-gray-700 dark:text-white border-2 border-blue-500 focus:outline-none"
+                            />
+                        ) : (
+                            <span
+                                onDoubleClick={() => !todo.completed && setEditing(true)}
+                                className={`flex-1 text-base cursor-text select-text leading-relaxed transition-all duration-200 ${
+                                    todo.completed 
+                                        ? 'line-through text-green-600 dark:text-green-400 opacity-75' 
+                                        : 'text-gray-800 dark:text-gray-100'
+                                }`}
+                            >
+                                {todo.text}
+                            </span>
+                        )}
+                        
+                        <button
+                            onClick={() => {
+                                playSound(DELETE_SOUND);
+                                onDelete(todo.id);
+                            }}
+                            className="px-4 py-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg text-sm font-medium transition-colors active:animate-pulse-tap min-h-[44px] min-w-[44px]"
+                            aria-label="Delete todo"
+                        >
+                            🗑️
+                        </button>
+                    </div>
                 </div>
             );
         };
 
         const TodoForm = ({ onAddTodo }) => {
             const [input, setInput] = useState('');
+            const inputRef = useRef(null);
 
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (input.trim()) {
                     playSound(ADD_SOUND);
-                    onAddTodo(input);
+                    onAddTodo(input.trim());
                     setInput('');
+                    inputRef.current?.focus();
                 }
             };
 
             return (
-                <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 mb-4">
-                    <input
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        placeholder="What needs to be done?"
-                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg dark:bg-gray-700 dark:text-white"
-                    />
-                    <button
-                        type="submit"
-                        className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none font-medium"
-                    >
-                        Add
-                    </button>
+                <form onSubmit={handleSubmit} className="mb-6">
+                    <div className="flex gap-3">
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            placeholder="What needs to be done?"
+                            className="flex-1 px-4 py-3 border-2 border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base dark:bg-gray-700 dark:text-white transition-all duration-200"
+                            maxLength={200}
+                        />
+                        <button
+                            type="submit"
+                            disabled={!input.trim()}
+                            className="px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed active:animate-pulse-tap min-h-[44px] transition-all duration-200"
+                        >
+                            ➕
+                        </button>
+                    </div>
+                    {input.length > 180 && (
+                        <p className="text-xs text-orange-500 mt-1 transition-all duration-200">
+                            {200 - input.length} characters remaining
+                        </p>
+                    )}
                 </form>
             );
         };
 
-        const Filters = ({ current, setFilter }) => (
-            <div className="flex justify-center gap-4 mb-4 text-sm font-medium">
+        const Filters = ({ current, setFilter, counts }) => (
+            <div className="flex justify-center gap-2 mb-6">
                 {varFiltersCg.map(f => (
                     <button
                         key={f}
                         onClick={() => setFilter(f)}
-                        className={`px-3 py-1 rounded ${
+                        className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 active:animate-pulse-tap min-h-[44px] ${
                             current === f
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-gray-200 dark:bg-gray-700 dark:text-gray-100'
+                                ? 'bg-blue-500 text-white shadow-lg transform scale-105'
+                                : 'bg-gray-200 dark:bg-gray-700 dark:text-gray-100 hover:bg-gray-300 dark:hover:bg-gray-600 hover:scale-105'
                         }`}
                     >
                         {f[0].toUpperCase() + f.slice(1)}
+                        {f !== 'all' && (
+                            <span className="ml-1 text-xs opacity-75">
+                                ({f === 'active' ? counts.active : counts.completed})
+                            </span>
+                        )}
                     </button>
                 ))}
             </div>
         );
 
         const SearchBar = ({ query, setQuery }) => (
-            <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search todos..."
-                className="mb-4 w-full px-4 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:bg-gray-700 dark:text-white"
-            />
+            <div className="relative mb-4">
+                <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search todos..."
+                    className="w-full px-4 py-3 pl-10 border-2 border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent dark:bg-gray-700 dark:text-white text-base transition-all duration-200"
+                />
+                <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 transition-all duration-200">
+                    🔍
+                </div>
+                {query && (
+                    <button
+                        onClick={() => setQuery('')}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 active:animate-pulse-tap transition-all duration-200"
+                    >
+                        ✕
+                    </button>
+                )}
+            </div>
         );
 
         const ThemeToggle = ({ theme, setTheme }) => (
-            <div className="flex justify-end mb-4">
-                <button
-                    onClick={() => {
-                        const newTheme = theme === 'dark' ? 'light' : 'dark';
-                        setTheme(newTheme);
-                        saveTheme(newTheme);
-                    }}
-                    className="text-sm text-gray-600 dark:text-gray-300 underline"
-                >
-                    Toggle {theme === 'dark' ? 'Light' : 'Dark'} Mode
-                </button>
-            </div>
+            <button
+                onClick={() => {
+                    const newTheme = theme === 'dark' ? 'light' : 'dark';
+                    setTheme(newTheme);
+                    saveTheme(newTheme);
+                }}
+                className="fixed top-4 right-4 z-50 p-3 bg-white dark:bg-gray-800 rounded-full shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-200 active:animate-pulse-tap hover:scale-110"
+                aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            >
+                {theme === 'dark' ? '☀️' : '🌙'}
+            </button>
         );
+
+        const Stats = ({ stats, todos }) => {
+            const completedToday = todos.filter(t => t.completed && 
+                new Date(t.completedAt || 0).toDateString() === new Date().toDateString()
+            ).length;
+
+            return (
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/30 rounded-xl transition-all duration-200 hover:scale-105">
+                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                            {stats.created}
+                        </div>
+                        <div className="text-xs text-blue-600 dark:text-blue-400">Created</div>
+                    </div>
+                    <div className="text-center p-3 bg-green-50 dark:bg-green-900/30 rounded-xl transition-all duration-200 hover:scale-105">
+                        <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                            {stats.completed}
+                        </div>
+                        <div className="text-xs text-green-600 dark:text-green-400">Completed</div>
+                    </div>
+                    <div className="text-center p-3 bg-purple-50 dark:bg-purple-900/30 rounded-xl transition-all duration-200 hover:scale-105">
+                        <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+                            {completedToday}
+                        </div>
+                        <div className="text-xs text-purple-600 dark:text-purple-400">Today</div>
+                    </div>
+                </div>
+            );
+        };
 
         const TodoApp = () => {
             const [todos, setTodos] = useState(loadTodos);
             const [query, setQuery] = useState('');
             const [filter, setFilter] = useState('all');
             const [theme, setTheme] = useState(loadTheme());
+            const [stats, setStats] = useState(loadStats());
+            const [newTodoId, setNewTodoId] = useState(null);
 
             // PWA Install logic
             const [canInstall, setCanInstall] = useState(false);
@@ -187,6 +416,10 @@
             }, [todos]);
 
             useEffect(() => {
+                saveStats(stats);
+            }, [stats]);
+
+            useEffect(() => {
                 const beforeInstallHandler = (e) => {
                     e.preventDefault();
                     deferredPromptRef.current = e;
@@ -196,22 +429,44 @@
                 return () => window.removeEventListener("beforeinstallprompt", beforeInstallHandler);
             }, []);
 
-            const addTodo = (text) => {
-                const newTodo = { id: Date.now(), text, completed: false };
-                setTodos([...todos, newTodo]);
-            };
+            const addTodo = useCallback((text) => {
+                const newTodo = { 
+                    id: Date.now(), 
+                    text, 
+                    completed: false,
+                    createdAt: new Date().toISOString()
+                };
+                setTodos(prev => [newTodo, ...prev]);
+                setStats(prev => ({ ...prev, created: prev.created + 1 }));
+                setNewTodoId(newTodo.id);
+                setTimeout(() => setNewTodoId(null), 300);
+            }, []);
 
-            const toggleTodo = (id) => {
-                setTodos(todos.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
-            };
+            const toggleTodo = useCallback((id) => {
+                setTodos(prev => prev.map(t => {
+                    if (t.id === id) {
+                        const updated = { ...t, completed: !t.completed };
+                        if (updated.completed) {
+                            updated.completedAt = new Date().toISOString();
+                        }
+                        return updated;
+                    }
+                    return t;
+                }));
+                
+                const todo = todos.find(t => t.id === id);
+                if (todo && !todo.completed) {
+                    setStats(prev => ({ ...prev, completed: prev.completed + 1 }));
+                }
+            }, [todos]);
 
-            const deleteTodo = (id) => {
-                setTodos(todos.filter(t => t.id !== id));
-            };
+            const deleteTodo = useCallback((id) => {
+                setTodos(prev => prev.filter(t => t.id !== id));
+            }, []);
 
-            const editTodo = (id, newText) => {
-                setTodos(todos.map(t => t.id === id ? { ...t, text: newText } : t));
-            };
+            const editTodo = useCallback((id, newText) => {
+                setTodos(prev => prev.map(t => t.id === id ? { ...t, text: newText } : t));
+            }, []);
 
             const filteredTodos = todos.filter(todo => {
                 const matchesQuery = todo.text.toLowerCase().includes(query.toLowerCase());
@@ -223,81 +478,113 @@
                 return matchesQuery && matchesFilter;
             });
 
+            const counts = {
+                active: todos.filter(t => !t.completed).length,
+                completed: todos.filter(t => t.completed).length
+            };
+
             return (
-                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-white-900 dark:to-gray-800 py-8 text-gray-800 dark:text-white transition-all">
-                    <div className="max-w-2xl mx-auto px-4">
-                        <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-8">
-                            <h1 className="text-4xl font-bold text-center mb-2">✅ Todo App</h1>
-                            <p className="text-center text-gray-600 dark:text-gray-400 mb-2">
-                                Fun & Functional Productivity
-                            </p>
-                            <p className="text-center text-gray-600 dark:text-gray-400 mb-6">
-                                with sound effects
-                            </p>
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 py-4 px-4 text-gray-800 dark:text-white transition-all duration-300">
+                    <ThemeToggle theme={theme} setTheme={setTheme} />
+                    
+                    <div className="max-w-md mx-auto">
+                        <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 border border-white/20 dark:border-gray-700/50 transition-all duration-300">
+                            <div className="text-center mb-6">
+                                <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                                    ✅ Todo App
+                                </h1>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    Swipe left to delete • Double tap to edit
+                                </p>
+                            </div>
+
                             {canInstall && (
-                                <div className="flex justify-end mb-4">
+                                <div className="mb-4">
                                     <button
                                         onClick={async () => {
                                             if (deferredPromptRef.current) {
                                                 deferredPromptRef.current.prompt();
                                                 const choice = await deferredPromptRef.current.userChoice;
-                                                if (choice.outcome === 'accepted') {
-                                                    console.log("User accepted the PWA install");
-                                                } else {
-                                                    console.log("User dismissed the PWA install");
-                                                }
                                                 deferredPromptRef.current = null;
                                                 setCanInstall(false);
                                             }
                                         }}
-                                        className="text-sm px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
+                                        className="w-full py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-xl hover:from-blue-600 hover:to-purple-600 transition-all duration-200 active:animate-pulse-tap font-medium hover:scale-105"
                                     >
                                         📲 Install App
                                     </button>
                                 </div>
                             )}
 
-                            <ThemeToggle theme={theme} setTheme={setTheme} />
+                            <Stats stats={stats} todos={todos} />
                             <TodoForm onAddTodo={addTodo} />
                             <SearchBar query={query} setQuery={setQuery} />
-                            <Filters current={filter} setFilter={setFilter} />
+                            <Filters current={filter} setFilter={setFilter} counts={counts} />
 
-                            <div className="flex flex-col sm:flex-row justify-between items-center gap-2 mb-4 text-sm">
+                            <div className="flex gap-2 mb-6">
                                 <button
                                     onClick={() => {
-                                        setTodos(todos.map(todo => ({ ...todo, completed: true })));
-                                        playSound(COMPLETE_SOUND); 
+                                        const activeTodos = todos.filter(t => !t.completed);
+                                        if (activeTodos.length > 0) {
+                                            setTodos(prev => prev.map(todo => ({ 
+                                                ...todo, 
+                                                completed: true,
+                                                completedAt: todo.completed ? todo.completedAt : new Date().toISOString()
+                                            })));
+                                            setStats(prev => ({ ...prev, completed: prev.completed + activeTodos.length }));
+                                            playSound(COMPLETE_SOUND);
+                                        }
                                     }}
-                                    className="w-full sm:w-auto px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600"
+                                    disabled={counts.active === 0}
+                                    className="flex-1 py-2 bg-green-500 text-white rounded-xl hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed active:animate-pulse-tap text-sm font-medium transition-all duration-200 hover:scale-105"
                                 >
-                                    Check All
+                                    ✓ All ({counts.active})
                                 </button>
                                 <button
                                     onClick={() => {
-                                        setTodos([]);
-                                        playSound(DELETE_SOUND);
+                                        if (todos.length > 0 && window.confirm('Clear all todos?')) {
+                                            setTodos([]);
+                                            playSound(DELETE_SOUND);
+                                        }
                                     }}
-                                    className="w-full sm:w-auto px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                                    disabled={todos.length === 0}
+                                    className="flex-1 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed active:animate-pulse-tap text-sm font-medium transition-all duration-200 hover:scale-105"
                                 >
-                                    Clear All
+                                    🗑️ Clear
                                 </button>
                             </div>
 
-                            {filteredTodos.length === 0 ? (
-                                <p className="text-center py-6 text-gray-500">No matching todos</p>
-                            ) : (
-                                <div className="space-y-3">
-                                    {filteredTodos.map(todo => (
+                            <div className="space-y-3 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
+                                {filteredTodos.length === 0 ? (
+                                    <div className="text-center py-12">
+                                        <div className="text-6xl mb-4 animate-bounce">
+                                            {query ? '🔍' : filter === 'completed' ? '🎉' : '📝'}
+                                        </div>
+                                        <p className="text-gray-500 dark:text-gray-400">
+                                            {query 
+                                                ? 'No matching todos found' 
+                                                : filter === 'completed' 
+                                                    ? 'No completed todos yet'
+                                                    : 'No todos yet. Add one above!'}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    filteredTodos.map(todo => (
                                         <TodoItem
                                             key={todo.id}
                                             todo={todo}
                                             onToggle={toggleTodo}
                                             onDelete={deleteTodo}
                                             onEdit={editTodo}
+                                            isNew={todo.id === newTodoId}
                                         />
-                                    ))}
-                                </div>
-                            )}
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                        
+                        <div className="text-center mt-4 text-xs text-gray-500 dark:text-gray-400 transition-all duration-200">
+                            Made with ❤️ by LFakh• {todos.length} total todos
                         </div>
                     </div>
                 </div>
