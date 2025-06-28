@@ -1,5 +1,5 @@
 # todo App
-A simple Todo web app built with React and Babel. This app allows users to add, complete, edit, and delete tasks. It features fun sound effects for a more engaging experience. Just click on the file, and it will run directly in your browser—no compilation needed! after all i used react library not React framework lol, and my way is Way superior ^-^
+A simple Todo web app built with React and Babel. This app allows users to add, complete, edit, and delete tasks. It features fun sound effects for a more engaging experience. Just click on the file, and it will run directly in your browser—no compilation needed! after all i used react library not React framework lol, and my way is Way superior-^-
 
 ## Features
 - Add new tasks
@@ -24,4 +24,4 @@ Simply download the repository and open the `index.html` file in your web browse
 ![Todo App Screenshot](/screenshot.png)
 
 ## Demo
-[Watch the demo video here](link_to_my_video)  <!-- I may add a small demo here and i may not, depends on how much free time i have lol -->
+[don't think i'll add a demo soon, but stay updated](link_to_my_video)  <!-- I may add a small demo here and i may not, depends on how much free time i have lol -->
